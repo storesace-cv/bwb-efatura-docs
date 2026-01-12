@@ -1,0 +1,13 @@
+# BWB App - Dependências Python
+
+# HTTP requests
+requests>=2.31.0
+
+# Excel
+openpyxl>=3.1.2
+
+# (Futuro: quando adicionarmos FastAPI e Supabase)
+# fastapi>=0.104.0
+# uvicorn[standard]>=0.24.0
+# supabase>=2.0.0
+# python-dotenv>=1.0.0

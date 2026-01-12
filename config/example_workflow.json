@@ -1,0 +1,15 @@
+{
+  "name": "export_supplier_invoices",
+  "description": "Export completo de facturas de fornecedores do eFatura CV",
+  "continue_on_error": false,
+  "apps": [
+    {
+      "name": "efatura-supplier-docs-download",
+      "config": {
+        "config_file": "app/purchases_update_supplier.ini",
+        "max_docs": 0,
+        "rewrite_existing": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "efatura-supplier-docs-download": {
+    "config_file": "app/purchases_update_supplier.ini",
+    "max_docs": 0,
+    "rewrite_existing": false,
+    "save_every_docs": -1,
+    "save_every_seconds": -1,
+    "verbose": false
+  }
+}

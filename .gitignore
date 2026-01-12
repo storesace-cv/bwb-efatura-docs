@@ -1,0 +1,71 @@
+# Environment variables
+.env
+.env.*
+.env.local
+!.env.example
+!.env.sample
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# eFatura specific
+token.json
+*.resume.json
+*.tmp
+
+# Excel files (opcional - se não quiseres commitar)
+# *.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (se usares frontend)
+node_modules/
+.next/
+out/
+
+# Database
+*.db
+*.sqlite
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
