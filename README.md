@@ -2,6 +2,32 @@
 
 Sistema modular de gestão de dados fiscais com suporte a múltiplas mini apps e orquestração.
 
+## Índice
+
+- [Sobre](#sobre)
+- [Características](#características)
+- [Instalação](#instalação)
+- [Configuração](#configuração)
+- [Uso](#uso)
+- [Mini Apps Disponíveis](#mini-apps-disponíveis)
+- [Desenvolvimento](#desenvolvimento)
+- [Documentação](#documentação)
+- [Roadmap](#roadmap)
+- [Licença](#licença)
+
+## Sobre
+
+O **BWB App** é um sistema modular desenvolvido para gestão de dados fiscais, especificamente para interagir com o portal **eFatura Cabo Verde**. O sistema baseia-se numa arquitetura de **mini apps orquestradas**, permitindo a execução modular e independente de diferentes funcionalidades.
+
+### Características Principais
+
+- 🧩 **Arquitetura Modular**: Cada funcionalidade é uma mini app independente
+- 🎯 **Orquestração**: Execução automática de apps com dependências
+- 🔄 **Workflows**: Sequências configuráveis de apps
+- 🛡️ **Resiliência**: Tratamento robusto de erros e retoma segura
+- 📊 **Export para Excel**: Saída estruturada e compatível
+- 🔐 **Autenticação**: Integração com eFatura CV via JWT
+
 ## Estrutura
 
 ```
@@ -46,8 +72,18 @@ pip install -r requirements.txt
 
 ## Configuração
 
-1. Copiar `.env.local.example` para `.env.local` e preencher com valores reais
-2. Configurar ficheiros INI para cada mini app (ex: `app/purchases_update_supplier.ini`)
+1. **Token de Acesso**: Criar `app/token.json` com token JWT do portal eFatura CV:
+   ```json
+   {
+     "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+     "refresh_token": "opcional"
+   }
+   ```
+   ⚠️ **Importante**: Este ficheiro contém credenciais sensíveis. Nunca commitar para Git.
+
+2. **Configuração INI**: Configurar ficheiro INI para cada mini app (ex: `app/purchases_update_supplier.ini`)
+
+Para mais detalhes, consulte [SETUP.md](docs/SETUP.md).
 
 ## Uso
 
@@ -93,6 +129,10 @@ Exporta documentos de compras (DFE) do portal eFatura CV para Excel.
 
 ### Criar nova mini app
 
+Consulte [DEVELOPMENT.md](docs/DEVELOPMENT.md) para guia completo de desenvolvimento.
+
+**Quick Start**:
+
 1. Criar diretório em `apps/nome_da_app/`
 2. Criar `__init__.py` e `app.py`
 3. Implementar classe que herda de `BaseApp`:
@@ -122,6 +162,30 @@ class MinhaApp(BaseApp):
         # Implementar lógica
         return AppResult(success=True, message="OK")
 ```
+
+4. Verificar descoberta: `python main.py --list-apps`
+
+## Documentação
+
+A documentação completa está disponível na pasta [docs/](docs/):
+
+- 📐 [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Arquitetura do sistema
+- 🔧 [SETUP.md](docs/SETUP.md) - Guia de instalação e configuração
+- 💻 [DEVELOPMENT.md](docs/DEVELOPMENT.md) - Guia para desenvolvedores
+- 📚 [API.md](docs/API.md) - Documentação de APIs e componentes
+- 🗺️ [ROADMAP.md](docs/ROADMAP.md) - Roadmap e status do projeto
+- 🔍 [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - Resolução de problemas
+- 📝 [CHANGELOG.md](docs/CHANGELOG.md) - Histórico de mudanças
+
+## Roadmap
+
+Ver [ROADMAP.md](docs/ROADMAP.md) para detalhes completos.
+
+### Próximas Versões
+
+- **v0.2.0**: Migração de código legado, testes automatizados
+- **v0.3.0**: API REST, base de dados, novas mini apps
+- **v1.0.0**: Interface web, integrações avançadas
 
 ## Licença
 
