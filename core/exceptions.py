@@ -21,3 +21,13 @@ class BWBValidationError(BWBAppError):
 class BWBExecutionError(BWBAppError):
     """Erro durante execução de uma mini app."""
     pass
+
+
+class EfaturaAuthNeedsReauth(Exception):
+    """Indica que a autenticação precisa ser refeita via GUI."""
+    pass
+
+
+class EfaturaAuthError(Exception):
+    """Erro geral durante autenticação eFatura."""
+    pass

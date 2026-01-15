@@ -30,8 +30,6 @@ from update_supplier_invoices import (
     parse_invoice_lines,
     append_error_row,
     append_line_rows,
-    load_token_json,
-    decode_jwt_exp_unverified,
     resolve_or_fail,
     safe_save_workbook,
     dump_text,
@@ -40,8 +38,8 @@ from update_supplier_invoices import (
 
 from core.base_app import BaseApp, AppResult
 from core.context import AppContext
-from core.exceptions import BWBConfigError, BWBExecutionError
-import datetime as dt
+from core.efatura_auth import EfaturaAuthManager
+from core.exceptions import EfaturaAuthNeedsReauth
 import time
 
 
@@ -145,22 +143,31 @@ class EfaturaSupplierDocsDownloadApp(BaseApp):
             except Exception as e:
                 log(f"WARNING: {e} (userinfo/refresh may fail)")
             
-            # 7. Carregar e validar token
-            access_token = load_token_json(cfg.token_json)
-            exp = decode_jwt_exp_unverified(access_token)
-            if exp:
-                exp_dt = dt.datetime.fromtimestamp(exp)
-                remaining = exp_dt - dt.datetime.now()
-                log(f"Access token: exp={exp_dt} (in {remaining})")
-                if remaining.total_seconds() < 60:
-                    return AppResult(
-                        success=False,
-                        message="Access token já expirado ou próximo da expiração. Atualizar token.json."
-                    )
-            
+            # 7. Autenticação eFatura (OIDC/OAuth2)
+            auth = EfaturaAuthManager(
+                issuer_url=cfg.auth_issuer_url,
+                client_id=cfg.auth_client_id,
+                redirect_uri=cfg.auth_redirect_uri,
+                scopes=cfg.auth_scopes,
+                token_store_path=cfg.auth_token_store,
+                timeout=cfg.timeout_sec,
+                retries=cfg.retries,
+                client_secret=cfg.auth_client_secret,
+            )
+            auth.migrate_legacy_tokens(cfg.token_json)
+            access_token_provider = lambda: auth.get_valid_access_token()
+
+            try:
+                _ = access_token_provider()
+            except EfaturaAuthNeedsReauth:
+                return AppResult(
+                    success=False,
+                    message="Autenticação eFatura necessária. Abra Configurações > eFatura > Ligar Conta para concluir o login."
+                )
+
             # 8. Criar cliente eFatura
             client = EfaturaClient(
-                access_token=access_token,
+                access_token_provider=access_token_provider,
                 repo_code=cfg.repo_code,
                 timeout_sec=cfg.timeout_sec,
                 retries=cfg.retries,
@@ -175,7 +182,7 @@ class EfaturaSupplierDocsDownloadApp(BaseApp):
             except PermissionError:
                 return AppResult(
                     success=False,
-                    message="TOKEN_EXPIRED_OR_INVALID (userinfo). Atualizar token.json."
+                    message="TOKEN_EXPIRED_OR_INVALID (userinfo)."
                 )
             except Exception as e:
                 log(f"WARNING: userinfo failed: {e} (continuing)")
@@ -206,7 +213,7 @@ class EfaturaSupplierDocsDownloadApp(BaseApp):
             except PermissionError:
                 return AppResult(
                     success=False,
-                    message="TOKEN_EXPIRED_OR_INVALID (listing). Atualizar token.json."
+                    message="TOKEN_EXPIRED_OR_INVALID (listing)."
                 )
             
             if discovered_date_keys:
@@ -375,6 +382,9 @@ class EfaturaSupplierDocsDownloadApp(BaseApp):
                 except PermissionError:
                     log("ERROR: TOKEN_EXPIRED_OR_INVALID while fetching documents. Stop now.")
                     break
+                except EfaturaAuthNeedsReauth:
+                    log("ERROR: Autenticação eFatura necessária. Abra Configurações > eFatura > Ligar Conta para concluir o login.")
+                    break
                 except Exception as e:
                     append_error_row(ws, uid, str(e)[:500])
                     errors += 1
@@ -413,6 +423,11 @@ class EfaturaSupplierDocsDownloadApp(BaseApp):
                 output_files=[cfg.excel_path]
             )
             
+        except EfaturaAuthNeedsReauth:
+            return AppResult(
+                success=False,
+                message="Autenticação eFatura necessária. Abra Configurações > eFatura > Ligar Conta para concluir o login."
+            )
         except Exception as e:
             log_exception(f"Erro inesperado na execução: {e}")
             return AppResult(
