@@ -29,8 +29,7 @@ git --version
 
 ### Conta eFatura CV
 - Acesso ao portal [eFatura CV](https://efatura.cv)
-- Token de acesso (JWT) obtido via portal
-- Credenciais válidas para autenticação
+- Credenciais válidas para autenticação (login OIDC/OAuth2)
 
 ## Instalação
 
@@ -97,34 +96,17 @@ efatura-supplier-docs-download v1.0.0
 
 ## Configuração
 
-### 1. Obter Token de Acesso
+### 1. Login via GUI (OIDC/OAuth2)
 
-O token JWT deve ser obtido do portal eFatura CV. Normalmente através de:
-1. Login no portal
-2. Acesso às configurações/API
-3. Gerar token de acesso
-4. Guardar o token (válido por período limitado)
+A autenticação agora é feita por **Authorization Code Flow + PKCE** via GUI (Configurações > eFatura > Ligar Conta).
+O utilizador faz login **uma única vez** no onboarding; depois a app renova os tokens automaticamente com
+`refresh_token` (scope `offline_access`).
 
-**Importante**: O token expira. Será necessário renová-lo periodicamente.
+- Não é necessário colar tokens manualmente.
+- O token store é persistido fora do repositório (ex.: `~/.bwb-app/efatura_tokens.json`).
+- Se o refresh token for revogado, a app pedirá novo login.
 
-### 2. Configurar Token
-
-Criar ficheiro `app/token.json` com o seguinte formato:
-
-```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refresh_token": "opcional_por_agora"
-}
-```
-
-**Segurança**: 
-- Este ficheiro contém credenciais sensíveis
-- **Nunca commitar** para o repositório Git
-- Usar permissões restritas: `chmod 600 app/token.json`
-- Adicionar `app/token.json` ao `.gitignore`
-
-### 3. Configurar App de Download
+### 2. Configurar App de Download
 
 Copiar o ficheiro de exemplo:
 ```bash
@@ -141,7 +123,7 @@ base_dir = /caminho/para/pasta/trabalho
 excel_path = supplier_invoices.xlsx
 
 [efatura]
-# Caminho para token.json (relativo ou absoluto)
+# token_json legacy (opcional para migração automática, se existir)
 token_json = app/token.json
 # Código do repositório (geralmente 1)
 repo_code = 1
@@ -157,6 +139,18 @@ retries = 3
 # Backoff entre tentativas (segundos)
 retry_backoff_sec = 1.5
 
+[efatura_auth]
+# OIDC issuer do eFatura
+issuer_url = https://iam.efatura.cv/auth/realms/taxpayers
+# Dados fornecidos pela GUI
+client_id = <preencher pela GUI>
+redirect_uri = <preencher pela GUI>
+# Scopes obrigatórios (inclui offline_access para refresh_token)
+scopes = openid profile email offline_access
+# Caminho do token store (fora do repo)
+token_store = ~/.bwb-app/efatura_tokens.json
+# client_secret = <opcional se cliente confidencial>
+
 [logging]
 # Log a cada N documentos processados
 progress_every_docs = 10
@@ -168,7 +162,7 @@ save_every_seconds = 300
 log_file = logs/update_supplier_invoices.log
 ```
 
-### 4. Criar Diretórios Necessários
+### 3. Criar Diretórios Necessários
 
 ```bash
 # Criar diretório de logs
@@ -178,7 +172,7 @@ mkdir -p logs
 mkdir -p /caminho/para/pasta/trabalho
 ```
 
-### 5. Configuração JSON (Opcional)
+### 4. Configuração JSON (Opcional)
 
 Para executar apps via configuração JSON, criar `config/config.json`:
 
@@ -232,7 +226,7 @@ python main.py --app efatura-supplier-docs-download \
 
 Se o token estiver expirado ou inválido, o sistema avisará:
 ```
-ERROR: TOKEN_EXPIRED_OR_INVALID (userinfo). Atualizar token.json.
+Autenticação eFatura necessária. Abra Configurações > eFatura > Ligar Conta para concluir o login.
 ```
 
 ### 3. Teste com Limite
@@ -313,9 +307,9 @@ EFATURA_CLIENT_SECRET=xxx
 ### Problema: "Token expirado"
 
 **Solução**:
-1. Obter novo token do portal eFatura CV
-2. Atualizar `app/token.json`
-3. Verificar permissões do ficheiro
+1. Abrir a GUI: Configurações > eFatura > Ligar Conta
+2. Concluir o login OIDC/OAuth2
+3. A app volta a funcionar com refresh automático
 
 ### Problema: "Erro DNS"
 

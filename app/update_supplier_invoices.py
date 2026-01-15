@@ -51,13 +51,15 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Sequence
 
 import requests
 import xml.etree.ElementTree as ET
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from core.efatura_auth import EfaturaAuthManager
+from core.exceptions import EfaturaAuthNeedsReauth
 
 SERVICES_BASE = "https://services.efatura.cv"
 IAM_BASE = "https://iam.efatura.cv"
@@ -390,6 +392,12 @@ class Config:
     base_dir: Path
     excel_path: Path
     token_json: Path
+    auth_issuer_url: str
+    auth_client_id: str
+    auth_redirect_uri: str
+    auth_scopes: List[str]
+    auth_token_store: Path
+    auth_client_secret: Optional[str]
     repo_code: str
     date_start: dt.date
     date_end: dt.date
@@ -414,6 +422,8 @@ def load_config(path: Path, verbose: bool) -> Config:
         raise ValueError("INI missing [paths] section")
     if "efatura" not in cp:
         raise ValueError("INI missing [efatura] section")
+    if "efatura_auth" not in cp:
+        raise ValueError("INI missing [efatura_auth] section")
 
     base_dir = Path(cp.get("paths", "base_dir", fallback=".")).expanduser().resolve()
     excel_rel = cp.get("paths", "excel_path", fallback="supplier_invoices.xlsx").strip()
@@ -426,6 +436,21 @@ def load_config(path: Path, verbose: bool) -> Config:
         token_json = (Path.cwd() / token_json).resolve()
 
     repo_code = cp.get("efatura", "repo_code", fallback="1").strip()
+
+    issuer_url = cp.get("efatura_auth", "issuer_url", fallback="https://iam.efatura.cv/auth/realms/taxpayers").strip()
+    client_id = cp.get("efatura_auth", "client_id", fallback="").strip()
+    redirect_uri = cp.get("efatura_auth", "redirect_uri", fallback="").strip()
+    scopes_raw = cp.get("efatura_auth", "scopes", fallback="openid profile email offline_access").strip()
+    scopes = [s for s in scopes_raw.split() if s]
+    token_store = Path(cp.get("efatura_auth", "token_store", fallback="~/.bwb-app/efatura_tokens.json")).expanduser()
+    if not token_store.is_absolute():
+        token_store = (Path.cwd() / token_store).resolve()
+    client_secret = cp.get("efatura_auth", "client_secret", fallback="").strip() or None
+
+    if not client_id:
+        raise ValueError("INI missing efatura_auth.client_id")
+    if not redirect_uri:
+        raise ValueError("INI missing efatura_auth.redirect_uri")
 
     date_start = parse_date(cp.get("efatura", "date_start"))
     date_end = parse_date(cp.get("efatura", "date_end"))
@@ -453,6 +478,12 @@ def load_config(path: Path, verbose: bool) -> Config:
         base_dir=base_dir,
         excel_path=excel_path,
         token_json=token_json,
+        auth_issuer_url=issuer_url,
+        auth_client_id=client_id,
+        auth_redirect_uri=redirect_uri,
+        auth_scopes=scopes,
+        auth_token_store=token_store,
+        auth_client_secret=client_secret,
         repo_code=repo_code,
         date_start=date_start,
         date_end=date_end,
@@ -474,8 +505,8 @@ def load_config(path: Path, verbose: bool) -> Config:
 # =============================================================================
 
 class EfaturaClient:
-    def __init__(self, access_token: str, repo_code: str, timeout_sec: int, retries: int, backoff_sec: float, verbose: bool):
-        self.access_token = access_token
+    def __init__(self, access_token_provider: Callable[[], str], repo_code: str, timeout_sec: int, retries: int, backoff_sec: float, verbose: bool):
+        self.access_token_provider = access_token_provider
         self.repo_code = repo_code
         self.timeout_sec = timeout_sec
         self.retries = retries
@@ -486,17 +517,20 @@ class EfaturaClient:
 
     def _headers(self, accept: str) -> Dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.access_token}",
+            "Authorization": f"Bearer {self.access_token_provider()}",
             "cv-ef-repository-code": str(self.repo_code),
             "Accept": accept,
         }
 
     def _request(self, method: str, url: str, *, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None) -> requests.Response:
         last_exc: Optional[Exception] = None
-        for attempt in range(1, self.retries + 1):
+        retried_auth = False
+        attempts = 0
+        while attempts < self.retries:
+            attempts += 1
             try:
                 if self.verbose:
-                    log(f"{method} {url} params={params or {}} (attempt {attempt}/{self.retries})")
+                    log(f"{method} {url} params={params or {}} (attempt {attempts}/{self.retries})")
                 r = self.session.request(method, url, headers=headers, params=params, timeout=self.timeout_sec)
                 if r.status_code in (401, 403):
                     # Be explicit: most frequent root cause is expired token
@@ -505,26 +539,31 @@ class EfaturaClient:
                         raise PermissionError(f"TOKEN_EXPIRED_OR_INVALID (HTTP {r.status_code})")
                 return r
             except PermissionError:
+                if not retried_auth:
+                    retried_auth = True
+                    headers = self._headers(headers.get("Accept", "application/json"))
+                    continue
                 raise
             except requests.exceptions.Timeout as e:
                 last_exc = e
-                log(f"WARNING: Timeout calling {url} (attempt {attempt}/{self.retries}). Retrying...")
+                log(f"WARNING: Timeout calling {url} (attempt {attempts}/{self.retries}). Retrying...")
             except requests.exceptions.ConnectionError as e:
                 last_exc = e
                 msg = str(e)
                 if "Could not resolve host" in msg or "Name or service not known" in msg or "nodename nor servname provided" in msg:
-                    log(f"WARNING: DNS/Connection error calling {url} (attempt {attempt}/{self.retries}): {e}")
+                    log(f"WARNING: DNS/Connection error calling {url} (attempt {attempts}/{self.retries}): {e}")
                 else:
-                    log(f"WARNING: Connection error calling {url} (attempt {attempt}/{self.retries}): {e}")
+                    log(f"WARNING: Connection error calling {url} (attempt {attempts}/{self.retries}): {e}")
             except requests.exceptions.SSLError as e:
                 last_exc = e
-                log(f"WARNING: SSL error calling {url} (attempt {attempt}/{self.retries}): {e}")
-            sleep_s = self.backoff_sec * attempt
+                log(f"WARNING: SSL error calling {url} (attempt {attempts}/{self.retries}): {e}")
+            sleep_s = self.backoff_sec * attempts
             time.sleep(sleep_s)
         raise RuntimeError(f"Failed to call {url} after {self.retries} attempts: {last_exc}")
 
     def userinfo_taxid(self) -> str:
-        r = self._request("GET", USERINFO_ENDPOINT, headers={"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"})
+        headers = {"Authorization": f"Bearer {self.access_token_provider()}", "Accept": "application/json"}
+        r = self._request("GET", USERINFO_ENDPOINT, headers=headers)
         if r.status_code != 200:
             raise RuntimeError(f"userinfo failed HTTP {r.status_code}: {r.text[:300]}")
         obj = r.json()
@@ -1326,18 +1365,28 @@ def main() -> int:
         log(f"WARNING: {e} (userinfo/refresh may fail)")
         # do not hard-fail; XML fetch/list only needs services.efatura.cv
 
-    access_token = load_token_json(cfg.token_json)
-    exp = decode_jwt_exp_unverified(access_token)
-    if exp:
-        exp_dt = dt.datetime.fromtimestamp(exp)
-        remaining = exp_dt - dt.datetime.now()
-        log(f"Access token: exp={exp_dt} (in {remaining})")
-        if remaining.total_seconds() < 60:
-            log("ERROR: Access token already expired (or expiring). Refresh token and update token.json.")
-            return 3
+    auth = EfaturaAuthManager(
+        issuer_url=cfg.auth_issuer_url,
+        client_id=cfg.auth_client_id,
+        redirect_uri=cfg.auth_redirect_uri,
+        scopes=cfg.auth_scopes,
+        token_store_path=cfg.auth_token_store,
+        timeout=cfg.timeout_sec,
+        retries=cfg.retries,
+        client_secret=cfg.auth_client_secret,
+    )
+    if auth.migrate_legacy_tokens(cfg.token_json):
+        log(f"Migrated legacy token.json to {cfg.auth_token_store}")
+
+    try:
+        access_token_provider = lambda: auth.get_valid_access_token()
+        _ = access_token_provider()
+    except EfaturaAuthNeedsReauth:
+        log("ERROR: Autenticação eFatura necessária. Abra Configurações > eFatura > Ligar Conta para concluir o login.")
+        return 3
 
     client = EfaturaClient(
-        access_token=access_token,
+        access_token_provider=access_token_provider,
         repo_code=cfg.repo_code,
         timeout_sec=cfg.timeout_sec,
         retries=cfg.retries,
@@ -1349,8 +1398,11 @@ def main() -> int:
     try:
         taxid = client.userinfo_taxid()
         log(f"eFatura userinfo OK: {taxid}")
+    except EfaturaAuthNeedsReauth:
+        log("ERROR: Autenticação eFatura necessária. Abra Configurações > eFatura > Ligar Conta para concluir o login.")
+        return 3
     except PermissionError:
-        log("ERROR: TOKEN_EXPIRED_OR_INVALID (userinfo). Refresh token and update token.json.")
+        log("ERROR: TOKEN_EXPIRED_OR_INVALID (userinfo).")
         return 3
     except Exception as e:
         log(f"WARNING: userinfo failed: {e} (continuing)")
@@ -1371,8 +1423,11 @@ def main() -> int:
     log(f"Listing DFEs from {cfg.date_start} to {cfg.date_end} (repo={cfg.repo_code}, page_size={cfg.page_size})")
     try:
         records, discovered_date_keys = client.list_dfes(cfg.date_start, cfg.date_end, cfg.page_size, show_fields=args.show_fields)
+    except EfaturaAuthNeedsReauth:
+        log("ERROR: Autenticação eFatura necessária. Abra Configurações > eFatura > Ligar Conta para concluir o login.")
+        return 3
     except PermissionError:
-        log("ERROR: TOKEN_EXPIRED_OR_INVALID (listing). Refresh token and update token.json.")
+        log("ERROR: TOKEN_EXPIRED_OR_INVALID (listing).")
         return 3
 
     if args.show_fields:
@@ -1531,6 +1586,9 @@ def main() -> int:
             log(f"OK UID={uid} lines={len(lines)} supplier={meta.get('supplier_name','')}")
             docs_since_save += 1
             checkpoint_save()
+        except EfaturaAuthNeedsReauth:
+            log("ERROR: Autenticação eFatura necessária. Abra Configurações > eFatura > Ligar Conta para concluir o login.")
+            break
         except PermissionError:
             log("ERROR: TOKEN_EXPIRED_OR_INVALID while fetching documents. Stop now.")
             break
